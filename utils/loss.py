@@ -1196,50 +1196,88 @@ class ComputeLossAuxOTA:
         self.balance = {3: [4.0, 1.0, 0.4]}.get(det.nl, [4.0, 1.0, 0.25, 0.06, .02])  # P3-P7
         self.ssi = list(det.stride).index(16) if autobalance else 0  # stride 16 index
         self.BCEcls, self.BCEobj, self.gr, self.hyp, self.autobalance = BCEcls, BCEobj, model.gr, h, autobalance
-        for k in 'na', 'nc', 'nl', 'anchors', 'stride':
+        for k in 'na', 'nc', 'nl', 'anchors', 'stride':  # det是个类，把det.k赋值给self.k
             setattr(self, k, getattr(det, k))
 
     def __call__(self, p, targets, imgs):  # predictions, targets, model   
-        device = targets.device
+        device = targets.device  # targets: [[0.00000, 0.00000, 0.58512, 0.27778, 0.59368, 0.33896]]
         lcls, lbox, lobj = torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device)
-        bs_aux, as_aux_, gjs_aux, gis_aux, targets_aux, anchors_aux = self.build_targets2(p[:self.nl], targets, imgs)
+        bs_aux, as_aux_, gjs_aux, gis_aux, targets_aux, anchors_aux = self.build_targets2(p[:self.nl], targets, imgs)  # self.nl: 4,
         bs, as_, gjs, gis, targets, anchors = self.build_targets(p[:self.nl], targets, imgs)
-        pre_gen_gains_aux = [torch.tensor(pp.shape, device=device)[[3, 2, 3, 2]] for pp in p[:self.nl]] 
-        pre_gen_gains = [torch.tensor(pp.shape, device=device)[[3, 2, 3, 2]] for pp in p[:self.nl]] 
+        pre_gen_gains_aux = [torch.tensor(pp.shape, device=device)[[3, 2, 3, 2]] for pp in p[:self.nl]]  # pre_gen_gains_aux的值: [[160, 160, 160, 160],[80, 80, 80, 80],[40, 40, 40, 40],[20, 20, 20, 20]]
+        pre_gen_gains = [torch.tensor(pp.shape, device=device)[[3, 2, 3, 2]] for pp in p[:self.nl]]  # pre_gen_gains的值: [[160, 160, 160, 160],[80, 80, 80, 80],[40, 40, 40, 40],[20, 20, 20, 20]]
     
 
         # Losses
-        for i in range(self.nl):  # layer index, layer predictions
-            pi = p[i]
-            pi_aux = p[i+self.nl]
+        for i in range(self.nl):  # layer index, layer predictions, i: 2
+            pi = p[i]  # pi.shape: [1, 3, 40, 40, 10]
+            pi_aux = p[i+self.nl]  # pi_aux.shape: [1, 3, 40, 40, 10]
             b, a, gj, gi = bs[i], as_[i], gjs[i], gis[i]  # image, anchor, gridy, gridx
+            # b: [0, 0, 0, 0, 0, 0]
+            # a: [2, 2, 2, 2, 2, 2]
+            # gj: [20, 20, 20, 20, 21, 21]
+            # gi: [21, 29, 20, 28, 21, 29]
             b_aux, a_aux, gj_aux, gi_aux = bs_aux[i], as_aux_[i], gjs_aux[i], gis_aux[i]  # image, anchor, gridy, gridx
-            tobj = torch.zeros_like(pi[..., 0], device=device)  # target obj
-            tobj_aux = torch.zeros_like(pi_aux[..., 0], device=device)  # target obj
+            # b_aux: [0, 0, 0, 0, 0, 0, 0]
+            # a_aux: [2, 2, 2, 2, 2, 2, 2]
+            # gj_aux: [20, 20, 20, 19, 19, 21, 21]
+            # gi_aux: [21, 29, 20, 21, 29, 21, 29]
+            tobj = torch.zeros_like(pi[..., 0], device=device)  # target obj, tobj.shape: [1, 3, 40, 40]
+            tobj_aux = torch.zeros_like(pi_aux[..., 0], device=device)  # target obj, tobj_aux.shape: [1, 3, 40, 40]
 
-            n = b.shape[0]  # number of targets
+            n = b.shape[0]  # number of targets, n: 6
             if n:
-                ps = pi[b, a, gj, gi]  # prediction subset corresponding to targets
+                ps = pi[b, a, gj, gi]  # prediction subset corresponding to targets, ps.shape: [6, 10]
 
                 # Regression
-                grid = torch.stack([gi, gj], dim=1)
-                pxy = ps[:, :2].sigmoid() * 2. - 0.5
-                pwh = (ps[:, 2:4].sigmoid() * 2) ** 2 * anchors[i]
-                pbox = torch.cat((pxy, pwh), 1)  # predicted box
-                selected_tbox = targets[i][:, 2:6] * pre_gen_gains[i]
+                grid = torch.stack([gi, gj], dim=1)  # grid: [[21, 20],[29, 20],[20, 20],[28, 20],[21, 21],[29, 21]]
+                pxy = ps[:, :2].sigmoid() * 2. - 0.5  # pxy.shape: [6, 2]
+                pwh = (ps[:, 2:4].sigmoid() * 2) ** 2 * anchors[i]  # pwh.shape: [6, 2]
+                pbox = torch.cat((pxy, pwh), 1)  # predicted box, pbox.shape: [6, 4]
+                # pbox: [[0.50276, 0.49482, 7.25245, 16.93105],
+                #      [0.50263, 0.49700, 7.37642, 16.93352],
+                #      [0.49943, 0.49512, 7.41274, 16.93250],
+                #      [0.50340, 0.49598, 7.36602, 16.93436],
+                #      [0.50062, 0.49776, 7.33114, 16.92381],
+                #      [0.50213, 0.49341, 7.34410, 16.93394]]
+                selected_tbox = targets[i][:, 2:6] * pre_gen_gains[i]  # selected_tbox.shape: [6, 4], 还原当前feature_map上的真实坐标
+                # selected_tbox: [[21.27874, 20.68615, 8.01240, 32.36983],
+                #              [29.44584, 20.56247, 8.44552, 32.30798],
+                #              [21.27874, 20.68615, 8.01240, 32.36983],
+                #              [29.44584, 20.56247, 8.44552, 32.30798],
+                #              [21.27874, 20.68615, 8.01240, 32.36983],
+                #              [29.44584, 20.56247, 8.44552, 32.30798]]
                 selected_tbox[:, :2] -= grid
-                iou = bbox_iou(pbox.T, selected_tbox, x1y1x2y2=False, CIoU=True)  # iou(prediction, target)
+                # selected_tbox: [[0.27874, 0.68615, 8.01240, 32.36983],
+                #              [0.44584, 0.56247, 8.44552, 32.30798],
+                #              [1.27874, 0.68615, 8.01240, 32.36983],
+                #              [1.44584, 0.56247, 8.44552, 32.30798],
+                #              [0.27874, -0.31385, 8.01240, 32.36983],
+                #              [0.44584, -0.43753, 8.44552, 32.30798]]
+                iou = bbox_iou(pbox.T, selected_tbox, x1y1x2y2=False, CIoU=True)  # iou(prediction, target), 使用CIOU计算方式
                 lbox += (1.0 - iou).mean()  # iou loss
 
                 # Objectness
-                tobj[b, a, gj, gi] = (1.0 - self.gr) + self.gr * iou.detach().clamp(0).type(tobj.dtype)  # iou ratio
+                tobj[b, a, gj, gi] = (1.0 - self.gr) + self.gr * iou.detach().clamp(0).type(tobj.dtype)  # iou ratio, self.gr: 1, tobj[b, a, gj, gi]: [0.47315, 0.45760, 0.43809, 0.42067, 0.47750, 0.45484]
 
                 # Classification
-                selected_tcls = targets[i][:, 1].long()
+                selected_tcls = targets[i][:, 1].long()  # 类别id, selected_tcls: [0, 0, 0, 0, 0, 0]
                 if self.nc > 1:  # cls loss (only if multiple classes)
-                    t = torch.full_like(ps[:, 5:], self.cn, device=device)  # targets
+                    t = torch.full_like(ps[:, 5:], self.cn, device=device)  # targets, self.cn标签平滑
+                    # t: [[0., 0., 0., 0., 0.],
+                    #  [0., 0., 0., 0., 0.],
+                    #  [0., 0., 0., 0., 0.],
+                    #  [0., 0., 0., 0., 0.],
+                    #  [0., 0., 0., 0., 0.],
+                    #  [0., 0., 0., 0., 0.]]
                     t[range(n), selected_tcls] = self.cp
-                    lcls += self.BCEcls(ps[:, 5:], t)  # BCE
+                    # t: [[1., 0., 0., 0., 0.],
+                    #  [1., 0., 0., 0., 0.],
+                    #  [1., 0., 0., 0., 0.],
+                    #  [1., 0., 0., 0., 0.],
+                    #  [1., 0., 0., 0., 0.],
+                    #  [1., 0., 0., 0., 0.]]
+                    lcls += self.BCEcls(ps[:, 5:], t)  # BCE, 无fl_gamma为BCEWithLogitsLoss(),有fl_gamma为FocalLoss
 
                 # Append targets to text file
                 # with open('targets.txt', 'a') as file:
@@ -1247,46 +1285,81 @@ class ComputeLossAuxOTA:
             
             n_aux = b_aux.shape[0]  # number of targets
             if n_aux:
-                ps_aux = pi_aux[b_aux, a_aux, gj_aux, gi_aux]  # prediction subset corresponding to targets
-                grid_aux = torch.stack([gi_aux, gj_aux], dim=1)
-                pxy_aux = ps_aux[:, :2].sigmoid() * 2. - 0.5
+                ps_aux = pi_aux[b_aux, a_aux, gj_aux, gi_aux]  # prediction subset corresponding to targets, ps_aux.shape: [7, 10]
+                grid_aux = torch.stack([gi_aux, gj_aux], dim=1)  # grig_aux.shape: [7, 2]
+                pxy_aux = ps_aux[:, :2].sigmoid() * 2. - 0.5  # pxy_aux.shape: [7, 2]
                 #pxy_aux = ps_aux[:, :2].sigmoid() * 3. - 1.
-                pwh_aux = (ps_aux[:, 2:4].sigmoid() * 2) ** 2 * anchors_aux[i]
-                pbox_aux = torch.cat((pxy_aux, pwh_aux), 1)  # predicted box
-                selected_tbox_aux = targets_aux[i][:, 2:6] * pre_gen_gains_aux[i]
+                pwh_aux = (ps_aux[:, 2:4].sigmoid() * 2) ** 2 * anchors_aux[i]  # pwh_aux.shape: [7, 2]
+                pbox_aux = torch.cat((pxy_aux, pwh_aux), 1)  # predicted box, pbox_aux.shape: [7, 4]
+                # pbox_aux: [[0.16602, 0.46875, 9.10515, 21.25085],
+                #  [0.41699, 0.70410, 12.86952, 13.27349],
+                #  [0.10742, 0.44824, 9.85950, 23.92382],
+                #  [-0.04688, 0.66016, 6.08861, 24.04192],
+                #  [0.44971, 0.67578, 11.78509, 19.26170],
+                #  [0.58105, 0.27051, 3.80577, 23.88452],
+                #  [0.47705, 0.63965, 12.37749, 9.12236]]
+                selected_tbox_aux = targets_aux[i][:, 2:6] * pre_gen_gains_aux[i]  # selected_tbox_aux.shape: [7, 4], 还原当前feature_map上的真实坐标
+                # selected_tbox_aux: [[21.27874, 20.68615,  8.01240, 32.36983],
+                #                 [29.44584, 20.56247,  8.44552, 32.30798],
+                #                 [21.27874, 20.68615,  8.01240, 32.36983],
+                #                 [21.27874, 20.68615,  8.01240, 32.36983],
+                #                 [29.44584, 20.56247,  8.44552, 32.30798],
+                #                 [21.27874, 20.68615,  8.01240, 32.36983],
+                #                 [29.44584, 20.56247,  8.44552, 32.30798]]
                 selected_tbox_aux[:, :2] -= grid_aux
-                iou_aux = bbox_iou(pbox_aux.T, selected_tbox_aux, x1y1x2y2=False, CIoU=True)  # iou(prediction, target)
+                # selected_tbox_aux: [[0.27874, 0.68615, 8.01240, 32.36983],
+                #  [0.44584, 0.56247, 8.44552, 32.30798],
+                #  [1.27874, 0.68615, 8.01240, 32.36983],
+                #  [0.27874, 1.68615, 8.01240, 32.36983],
+                #  [0.44584, 1.56247, 8.44552, 32.30798],
+                #  [0.27874, -0.31385, 8.01240, 32.36983],
+                #  [0.44584, -0.43753, 8.44552, 32.30798]]
+                iou_aux = bbox_iou(pbox_aux.T, selected_tbox_aux, x1y1x2y2=False, CIoU=True)  # iou(prediction, target), 使用CIOU计算方式
                 lbox += 0.25 * (1.0 - iou_aux).mean()  # iou loss
 
                 # Objectness
-                tobj_aux[b_aux, a_aux, gj_aux, gi_aux] = (1.0 - self.gr) + self.gr * iou_aux.detach().clamp(0).type(tobj_aux.dtype)  # iou ratio
+                tobj_aux[b_aux, a_aux, gj_aux, gi_aux] = (1.0 - self.gr) + self.gr * iou_aux.detach().clamp(0).type(tobj_aux.dtype)  # iou ratio, tobj_aux[b_aux, a_aux, gj_aux, gi_aux]: [0.60205, 0.32324, 0.59863, 0.56348, 0.47949, 0.35010, 0.21118]
 
                 # Classification
-                selected_tcls_aux = targets_aux[i][:, 1].long()
+                selected_tcls_aux = targets_aux[i][:, 1].long()  # 类别id, selected_tcls: [0, 0, 0, 0, 0, 0, 0]
                 if self.nc > 1:  # cls loss (only if multiple classes)
-                    t_aux = torch.full_like(ps_aux[:, 5:], self.cn, device=device)  # targets
+                    t_aux = torch.full_like(ps_aux[:, 5:], self.cn, device=device)  # targets, self.cn标签平滑
+                    # t_aux: [[0., 0., 0., 0., 0.],
+                    #  [0., 0., 0., 0., 0.],
+                    #  [0., 0., 0., 0., 0.],
+                    #  [0., 0., 0., 0., 0.],
+                    #  [0., 0., 0., 0., 0.],
+                    #  [0., 0., 0., 0., 0.],
+                    #  [0., 0., 0., 0., 0.]]
                     t_aux[range(n_aux), selected_tcls_aux] = self.cp
-                    lcls += 0.25 * self.BCEcls(ps_aux[:, 5:], t_aux)  # BCE
+                    # t_aux: [[1., 0., 0., 0., 0.],
+                    #  [1., 0., 0., 0., 0.],
+                    #  [1., 0., 0., 0., 0.],
+                    #  [1., 0., 0., 0., 0.],
+                    #  [1., 0., 0., 0., 0.],
+                    #  [1., 0., 0., 0., 0.],
+                    #  [1., 0., 0., 0., 0.]]
+                    lcls += 0.25 * self.BCEcls(ps_aux[:, 5:], t_aux)  # BCE, 无fl_gamma为BCEWithLogitsLoss(),有fl_gamma为FocalLoss
 
-            obji = self.BCEobj(pi[..., 4], tobj)
-            obji_aux = self.BCEobj(pi_aux[..., 4], tobj_aux)
+            obji = self.BCEobj(pi[..., 4], tobj)  # tobj.shape: [1, 3, 160, 160], tobj[b, a, gj, gi]的值在上面被赋过值了, 无fl_gamma为BCEWithLogitsLoss(),有fl_gamma为FocalLoss
+            obji_aux = self.BCEobj(pi_aux[..., 4], tobj_aux)  # tobj_aux.shape: [1, 3, 160, 160], tobj_aux[b_aux, a_aux, gj_aux, gi_aux]的值在上面被赋过值了, 无fl_gamma为BCEWithLogitsLoss(),有fl_gamma为FocalLoss
             lobj += obji * self.balance[i] + 0.25 * obji_aux * self.balance[i] # obj loss
-            if self.autobalance:
+            if self.autobalance:  # False
                 self.balance[i] = self.balance[i] * 0.9999 + 0.0001 / obji.detach().item()
 
-        if self.autobalance:
+        if self.autobalance:  # False
             self.balance = [x / self.balance[self.ssi] for x in self.balance]
         lbox *= self.hyp['box']
         lobj *= self.hyp['obj']
         lcls *= self.hyp['cls']
-        bs = tobj.shape[0]  # batch size
+        bs = tobj.shape[0]  # batch size, bs: 1
 
         loss = lbox + lobj + lcls
         return loss * bs, torch.cat((lbox, lobj, lcls, loss)).detach()
 
     def build_targets(self, p, targets, imgs):
         
-        indices, anch = self.find_3_positive(p, targets)
+        indices, anch = self.find_3_positive(p, targets)  # 一个目标匹配3个临近正样本，更精准的匹配
 
         matching_bs = [[] for pp in p]
         matching_as = [[] for pp in p]
@@ -1300,12 +1373,12 @@ class ComputeLossAuxOTA:
         for batch_idx in range(p[0].shape[0]):
         
             b_idx = targets[:, 0]==batch_idx
-            this_target = targets[b_idx]
+            this_target = targets[b_idx]  # this_target: [[0.00000, 0.00000, 0.53197, 0.51715, 0.20031, 0.80925],[0.00000, 0.00000, 0.73615, 0.51406, 0.21114, 0.80770]]
             if this_target.shape[0] == 0:
                 continue
                 
-            txywh = this_target[:, 2:6] * imgs[batch_idx].shape[1]
-            txyxy = xywh2xyxy(txywh)
+            txywh = this_target[:, 2:6] * imgs[batch_idx].shape[1]  # txywh: [[ 680.91974,  661.95691,  256.39685, 1035.83472],[ 942.26672,  657.99915,  270.25653, 1033.85522]]
+            txyxy = xywh2xyxy(txywh)  #txyxy: [[ 552.72131,  144.03955,  809.11816, 1179.87427],[ 807.13843,  141.07153, 1077.39502, 1174.92676]]
 
             pxyxys = []
             p_cls = []
@@ -1320,6 +1393,10 @@ class ComputeLossAuxOTA:
             for i, pi in enumerate(p):
                 
                 b, a, gj, gi = indices[i]
+                # b: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+                # a: [0, 0, 1, 1, 2, 2, 0, 0, 1, 1, 2, 2, 0, 0, 1, 1, 2, 2]
+                # gj: [20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 21, 21, 21, 21, 21, 21]
+                # gi: [21, 29, 21, 29, 21, 29, 20, 28, 20, 28, 20, 28, 21, 29, 21, 29, 21, 29]
                 idx = (b == batch_idx)
                 b, a, gj, gi = b[idx], a[idx], gj[idx], gi[idx]                
                 all_b.append(b)
@@ -1329,14 +1406,14 @@ class ComputeLossAuxOTA:
                 all_anch.append(anch[i][idx])
                 from_which_layer.append(torch.ones(size=(len(b),)) * i)
                 
-                fg_pred = pi[b, a, gj, gi]                
+                fg_pred = pi[b, a, gj, gi]  # fg_pred.shape: [18, 10], [18个正样本anchor，10个值xywh+5cls]
                 p_obj.append(fg_pred[:, 4:5])
                 p_cls.append(fg_pred[:, 5:])
                 
                 grid = torch.stack([gi, gj], dim=1)
-                pxy = (fg_pred[:, :2].sigmoid() * 2. - 0.5 + grid) * self.stride[i] #/ 8.
-                #pxy = (fg_pred[:, :2].sigmoid() * 3. - 1. + grid) * self.stride[i]
-                pwh = (fg_pred[:, 2:4].sigmoid() * 2) ** 2 * anch[i][idx] * self.stride[i] #/ 8.
+                pxy = (fg_pred[:, :2].sigmoid() * 2. - 0.5 + grid) * self.stride[i]  # (fg_pred[:, :2].sigmoid() * 2. - 0.5 + grid):还原当前feature_map上的坐标，* self.stride[i]:还原原图上的真实坐标
+                #pxy = (fg_pred[:, :2].sigmoid() * 3. - 1. + grid) * self.stride[i]  # pxy.shape:[18, 2]
+                pwh = (fg_pred[:, 2:4].sigmoid() * 2) ** 2 * anch[i][idx] * self.stride[i]  # pwh.shape:[18, 2]
                 pxywh = torch.cat([pxy, pwh], dim=-1)
                 pxyxy = xywh2xyxy(pxywh)
                 pxyxys.append(pxyxy)
@@ -1352,65 +1429,65 @@ class ComputeLossAuxOTA:
             all_gj = torch.cat(all_gj, dim=0)
             all_gi = torch.cat(all_gi, dim=0)
             all_anch = torch.cat(all_anch, dim=0)
-        
-            pair_wise_iou = box_iou(txyxy, pxyxys)
+            # txyxy真实目标坐标值，pxyxys预测坐标值
+            pair_wise_iou = box_iou(txyxy, pxyxys)  #txyxy.shape:[2, 4],pxyxys.shape:[36, 4],pair_wise_iou.shape:[2, 36]
 
-            pair_wise_iou_loss = -torch.log(pair_wise_iou + 1e-8)
+            pair_wise_iou_loss = -torch.log(pair_wise_iou + 1e-8)  # iou loss
 
-            top_k, _ = torch.topk(pair_wise_iou, min(20, pair_wise_iou.shape[1]), dim=1)
-            dynamic_ks = torch.clamp(top_k.sum(1).int(), min=1)
+            top_k, _ = torch.topk(pair_wise_iou, min(20, pair_wise_iou.shape[1]), dim=1)  # top_k.shape:[2, 20]， 选出前20个iou值最大的
+            dynamic_ks = torch.clamp(top_k.sum(1).int(), min=1)  # top_k.sum(1): [5.97737, 6.06848], .int(): [5, 6], dynamic_ks: [5, 6]
 
             gt_cls_per_image = (
                 F.one_hot(this_target[:, 1].to(torch.int64), self.nc)
                 .float()
                 .unsqueeze(1)
                 .repeat(1, pxyxys.shape[0], 1)
-            )
+            )  # gt_cls_per_image.shape: [2, 36, 5], gt_cls_per_image: [[[1., 0., 0., 0., 0.]x36], [[1., 0., 0., 0., 0.]x36]]
 
-            num_gt = this_target.shape[0]
+            num_gt = this_target.shape[0]  # num_gt: 2
             cls_preds_ = (
                 p_cls.float().unsqueeze(0).repeat(num_gt, 1, 1).sigmoid_()
                 * p_obj.unsqueeze(0).repeat(num_gt, 1, 1).sigmoid_()
-            )
+            )  # p_cls.shape: [36, 5], p_obj.shape: [36, 1], cls_preds_.shape: [2, 36, 5], 2是指2个label目标，36个anchor, 5是类别数量, cls_preds_=cls*obj.repeat
 
-            y = cls_preds_.sqrt_()
+            y = cls_preds_.sqrt_()  # 开根号
             pair_wise_cls_loss = F.binary_cross_entropy_with_logits(
                torch.log(y/(1-y)) , gt_cls_per_image, reduction="none"
-            ).sum(-1)
+            ).sum(-1)  # 计算cls_loss, pair_wise_cls_loss.shape: [2, 36]
             del cls_preds_
         
             cost = (
                 pair_wise_cls_loss
                 + 3.0 * pair_wise_iou_loss
-            )
+            )  # 计算cost，cls:reg=1:3, cost.shape: [2, 60]
 
-            matching_matrix = torch.zeros_like(cost)
+            matching_matrix = torch.zeros_like(cost)  # matching_matrix.shape: [2, 36]
 
-            for gt_idx in range(num_gt):
+            for gt_idx in range(num_gt):  # 选出前k个
                 _, pos_idx = torch.topk(
                     cost[gt_idx], k=dynamic_ks[gt_idx].item(), largest=False
-                )
+                )  # cost[gt_idx].shape: [36], dynamic_ks[0].item(): 5, dynamic_ks[1].item(): 6
                 matching_matrix[gt_idx][pos_idx] = 1.0
 
             del top_k, dynamic_ks
-            anchor_matching_gt = matching_matrix.sum(0)
-            if (anchor_matching_gt > 1).sum() > 0:
+            anchor_matching_gt = matching_matrix.sum(0)  # 计算每个anchor匹配上的gt数量, anchor_matching_gt.shape: [36]
+            if (anchor_matching_gt > 1).sum() > 0:  # 每个anchor只能匹配一个gt，取cost值最小的为当前anchor匹配到的gt
                 _, cost_argmin = torch.min(cost[:, anchor_matching_gt > 1], dim=0)
                 matching_matrix[:, anchor_matching_gt > 1] *= 0.0
                 matching_matrix[cost_argmin, anchor_matching_gt > 1] = 1.0
-            fg_mask_inboxes = matching_matrix.sum(0) > 0.0
-            matched_gt_inds = matching_matrix[:, fg_mask_inboxes].argmax(0)
+            fg_mask_inboxes = matching_matrix.sum(0) > 0.0  # fg_mask_inboxes.shape: [36]
+            matched_gt_inds = matching_matrix[:, fg_mask_inboxes].argmax(0)  # anchor匹配上的gt index, matched_gt_inds.shape: 11
         
-            from_which_layer = from_which_layer[fg_mask_inboxes]
-            all_b = all_b[fg_mask_inboxes]
-            all_a = all_a[fg_mask_inboxes]
-            all_gj = all_gj[fg_mask_inboxes]
-            all_gi = all_gi[fg_mask_inboxes]
-            all_anch = all_anch[fg_mask_inboxes]
+            from_which_layer = from_which_layer[fg_mask_inboxes]  # from_which_layer: [2., 2., 2., 2., 2., 2., 3., 3., 3., 3., 3.]
+            all_b = all_b[fg_mask_inboxes]  # all_b.shape: [11]
+            all_a = all_a[fg_mask_inboxes]  # all_a.shape: [11]
+            all_gj = all_gj[fg_mask_inboxes]  # all_gj.shape: [11]
+            all_gi = all_gi[fg_mask_inboxes]  # all_gi.shape: [11]
+            all_anch = all_anch[fg_mask_inboxes]  # all_anch.shape: [11, 2]
         
-            this_target = this_target[matched_gt_inds]
+            this_target = this_target[matched_gt_inds]  # this_target.shape: [11, 6]
         
-            for i in range(nl):
+            for i in range(nl):  # nl: 4
                 layer_idx = from_which_layer == i
                 matching_bs[i].append(all_b[layer_idx])
                 matching_as[i].append(all_a[layer_idx])
@@ -1434,12 +1511,41 @@ class ComputeLossAuxOTA:
                 matching_gis[i] = torch.tensor([], device='cuda:0', dtype=torch.int64)
                 matching_targets[i] = torch.tensor([], device='cuda:0', dtype=torch.int64)
                 matching_anchs[i] = torch.tensor([], device='cuda:0', dtype=torch.int64)
-
+        # matching_bs: [[], [], [0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0]]
+        # matching_as: [[], [], [2, 2, 2, 2, 2, 2], [0, 0, 0, 0, 0]]
+        # matching_gjs: [[], [], [20, 20, 20, 20, 21, 21], [10, 10,  9, 10, 10]]
+        # matching_gis: [[], [], [21, 29, 20, 28, 21, 29], [10, 14, 14, 11, 15]]
+        # matching_targets: [[],
+        #                    [],
+        #                    [[0.00000, 0.00000, 0.53197, 0.51715, 0.20031, 0.80925],
+        #                     [0.00000, 0.00000, 0.73615, 0.51406, 0.21114, 0.80770],
+        #                     [0.00000, 0.00000, 0.53197, 0.51715, 0.20031, 0.80925],
+        #                     [0.00000, 0.00000, 0.73615, 0.51406, 0.21114, 0.80770],
+        #                     [0.00000, 0.00000, 0.53197, 0.51715, 0.20031, 0.80925],
+        #                     [0.00000, 0.00000, 0.73615, 0.51406, 0.21114, 0.80770]],
+        #                    [[0.00000, 0.00000, 0.53197, 0.51715, 0.20031, 0.80925],
+        #                     [0.00000, 0.00000, 0.73615, 0.51406, 0.21114, 0.80770],
+        #                     [0.00000, 0.00000, 0.73615, 0.51406, 0.21114, 0.80770],
+        #                     [0.00000, 0.00000, 0.53197, 0.51715, 0.20031, 0.80925],
+        #                     [0.00000, 0.00000, 0.73615, 0.51406, 0.21114, 0.80770]]]
+        # matching_anchs: [[],
+        #                  [],
+        #                  [[7.4375, 16.938],
+        #                   [7.4375, 16.938],
+        #                   [7.4375, 16.938],
+        #                   [7.4375, 16.938],
+        #                   [7.4375, 16.938],
+        #                   [7.4375, 16.938]],
+        #                  [[6.8125, 9.6094],
+        #                   [6.8125, 9.6094],
+        #                   [6.8125, 9.6094],
+        #                   [6.8125, 9.6094],
+        #                   [6.8125, 9.6094]]]
         return matching_bs, matching_as, matching_gjs, matching_gis, matching_targets, matching_anchs
 
     def build_targets2(self, p, targets, imgs):
         
-        indices, anch = self.find_5_positive(p, targets)
+        indices, anch = self.find_5_positive(p, targets)  # 一个目标匹配5个临近正样本，粗略匹配
 
         matching_bs = [[] for pp in p]
         matching_as = [[] for pp in p]
@@ -1448,17 +1554,17 @@ class ComputeLossAuxOTA:
         matching_targets = [[] for pp in p]
         matching_anchs = [[] for pp in p]
         
-        nl = len(p)    
+        nl = len(p)    # nl: 4
     
         for batch_idx in range(p[0].shape[0]):
         
             b_idx = targets[:, 0]==batch_idx
-            this_target = targets[b_idx]
+            this_target = targets[b_idx]  # this_target: [[0.00000, 0.00000, 0.58512, 0.27778, 0.59368, 0.33896]]
             if this_target.shape[0] == 0:
                 continue
                 
-            txywh = this_target[:, 2:6] * imgs[batch_idx].shape[1]
-            txyxy = xywh2xyxy(txywh)
+            txywh = this_target[:, 2:6] * imgs[batch_idx].shape[1]  # txywh: [[748.95386, 355.56366, 759.90851, 433.87509]]
+            txyxy = xywh2xyxy(txywh)  # txyxy: [[ 368.99960,  138.62611, 1128.90808,  572.50122]]
 
             pxyxys = []
             p_cls = []
@@ -1470,9 +1576,13 @@ class ComputeLossAuxOTA:
             all_gi = []
             all_anch = []
             
-            for i, pi in enumerate(p):
+            for i, pi in enumerate(p): # i:2, pi.shape:[1, 3, 40, 40, 10]
                 
                 b, a, gj, gi = indices[i]
+                # b: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+                # a: [1, 2, 1, 2, 1, 2, 1, 2, 1, 2]
+                # gj: [11, 11, 11, 11, 10, 10, 11, 11, 12, 12]
+                # gi: [23, 23, 22, 22, 23, 23, 24, 24, 23, 23]
                 idx = (b == batch_idx)
                 b, a, gj, gi = b[idx], a[idx], gj[idx], gi[idx]                
                 all_b.append(b)
@@ -1482,18 +1592,18 @@ class ComputeLossAuxOTA:
                 all_anch.append(anch[i][idx])
                 from_which_layer.append(torch.ones(size=(len(b),)) * i)
                 
-                fg_pred = pi[b, a, gj, gi]                
+                fg_pred = pi[b, a, gj, gi]  # fg_pred.shape: [10, 10], [10个正样本anchor，10个值xywh+5cls]
                 p_obj.append(fg_pred[:, 4:5])
                 p_cls.append(fg_pred[:, 5:])
                 
                 grid = torch.stack([gi, gj], dim=1)
-                pxy = (fg_pred[:, :2].sigmoid() * 2. - 0.5 + grid) * self.stride[i] #/ 8.
-                #pxy = (fg_pred[:, :2].sigmoid() * 3. - 1. + grid) * self.stride[i]
-                pwh = (fg_pred[:, 2:4].sigmoid() * 2) ** 2 * anch[i][idx] * self.stride[i] #/ 8.
-                pxywh = torch.cat([pxy, pwh], dim=-1)
+                pxy = (fg_pred[:, :2].sigmoid() * 2. - 0.5 + grid) * self.stride[i]  # (fg_pred[:, :2].sigmoid() * 2. - 0.5 + grid):还原当前feature_map上的坐标，* self.stride[i]:还原原图上的真实坐标
+                #pxy = (fg_pred[:, :2].sigmoid() * 3. - 1. + grid) * self.stride[i]  # pxy.shape:[10, 2]
+                pwh = (fg_pred[:, 2:4].sigmoid() * 2) ** 2 * anch[i][idx] * self.stride[i]  # pwh.shape:[10, 2]
+                pxywh = torch.cat([pxy, pwh], dim=-1)  #
                 pxyxy = xywh2xyxy(pxywh)
                 pxyxys.append(pxyxy)
-            
+            ###========================从这里的debug开始变成2个目标========================###
             pxyxys = torch.cat(pxyxys, dim=0)
             if pxyxys.shape[0] == 0:
                 continue
@@ -1505,65 +1615,65 @@ class ComputeLossAuxOTA:
             all_gj = torch.cat(all_gj, dim=0)
             all_gi = torch.cat(all_gi, dim=0)
             all_anch = torch.cat(all_anch, dim=0)
-        
-            pair_wise_iou = box_iou(txyxy, pxyxys)
+            # txyxy真实目标坐标值，pxyxys预测坐标值
+            pair_wise_iou = box_iou(txyxy, pxyxys)  #txyxy.shape:[2, 4],pxyxys.shape:[60, 4],pair_wise_iou.shape:[2, 60]
 
-            pair_wise_iou_loss = -torch.log(pair_wise_iou + 1e-8)
+            pair_wise_iou_loss = -torch.log(pair_wise_iou + 1e-8)  # iou loss
 
-            top_k, _ = torch.topk(pair_wise_iou, min(20, pair_wise_iou.shape[1]), dim=1)
-            dynamic_ks = torch.clamp(top_k.sum(1).int(), min=1)
+            top_k, _ = torch.topk(pair_wise_iou, min(20, pair_wise_iou.shape[1]), dim=1)  # top_k.shape:[2, 20]， 选出前20个iou值最大的
+            dynamic_ks = torch.clamp(top_k.sum(1).int(), min=1)  # top_k.sum(1): [6.89685, 7.04802], .int(): [6, 7], dynamic_ks: [6, 7]
 
             gt_cls_per_image = (
                 F.one_hot(this_target[:, 1].to(torch.int64), self.nc)
                 .float()
                 .unsqueeze(1)
                 .repeat(1, pxyxys.shape[0], 1)
-            )
+            )  # gt_cls_per_image.shape: [2, 60, 5], gt_cls_per_image: [[[1., 0., 0., 0., 0.]x60],[[1., 0., 0., 0., 0.]x60]]
 
-            num_gt = this_target.shape[0]
+            num_gt = this_target.shape[0]  # num_gt: 2
             cls_preds_ = (
                 p_cls.float().unsqueeze(0).repeat(num_gt, 1, 1).sigmoid_()
                 * p_obj.unsqueeze(0).repeat(num_gt, 1, 1).sigmoid_()
-            )
+            )  # p_cls.shape: [60, 5], p_obj.shape: [60, 1], cls_preds_.shape: [2, 60, 5], 2是指2个label目标，60个anchor, 5是类别数量, cls_preds_=cls*obj.repeat
 
-            y = cls_preds_.sqrt_()
+            y = cls_preds_.sqrt_()  # 开根号
             pair_wise_cls_loss = F.binary_cross_entropy_with_logits(
                torch.log(y/(1-y)) , gt_cls_per_image, reduction="none"
-            ).sum(-1)
+            ).sum(-1)  # 计算cls_loss, pair_wise_cls_loss.shape: [2, 60]
             del cls_preds_
         
             cost = (
                 pair_wise_cls_loss
                 + 3.0 * pair_wise_iou_loss
-            )
+            )  # 计算cost，cls:reg=1:3, cost.shape: [2, 60]
 
-            matching_matrix = torch.zeros_like(cost)
+            matching_matrix = torch.zeros_like(cost)  # matching_matrix.shape: [2, 60]
 
-            for gt_idx in range(num_gt):
+            for gt_idx in range(num_gt):  # 选出前k个
                 _, pos_idx = torch.topk(
                     cost[gt_idx], k=dynamic_ks[gt_idx].item(), largest=False
-                )
+                )  # cost[gt_idx].shape: [60], dynamic_ks[0].item(): 6, dynamic_ks[1].item(): 7
                 matching_matrix[gt_idx][pos_idx] = 1.0
 
             del top_k, dynamic_ks
-            anchor_matching_gt = matching_matrix.sum(0)
-            if (anchor_matching_gt > 1).sum() > 0:
+            anchor_matching_gt = matching_matrix.sum(0)  # 计算每个anchor匹配上的gt数量, anchor_matching_gt.shape: [60]
+            if (anchor_matching_gt > 1).sum() > 0:  # 每个anchor只能匹配一个gt，取cost值最小的为当前anchor匹配到的gt
                 _, cost_argmin = torch.min(cost[:, anchor_matching_gt > 1], dim=0)
                 matching_matrix[:, anchor_matching_gt > 1] *= 0.0
                 matching_matrix[cost_argmin, anchor_matching_gt > 1] = 1.0
-            fg_mask_inboxes = matching_matrix.sum(0) > 0.0
-            matched_gt_inds = matching_matrix[:, fg_mask_inboxes].argmax(0)
+            fg_mask_inboxes = matching_matrix.sum(0) > 0.0  # fg_mask_inboxes.shape: [60]
+            matched_gt_inds = matching_matrix[:, fg_mask_inboxes].argmax(0)  # anchor匹配上的gt index, matched_gt_inds.shape: 13
         
-            from_which_layer = from_which_layer[fg_mask_inboxes]
-            all_b = all_b[fg_mask_inboxes]
-            all_a = all_a[fg_mask_inboxes]
-            all_gj = all_gj[fg_mask_inboxes]
-            all_gi = all_gi[fg_mask_inboxes]
-            all_anch = all_anch[fg_mask_inboxes]
+            from_which_layer = from_which_layer[fg_mask_inboxes]  # from_which_layer: [2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3]
+            all_b = all_b[fg_mask_inboxes]  # all_b.shape: [13]
+            all_a = all_a[fg_mask_inboxes]  # all_a.shape: [13]
+            all_gj = all_gj[fg_mask_inboxes]  # all_gj.shape: [13]
+            all_gi = all_gi[fg_mask_inboxes]  # all_gi.shape: [13]
+            all_anch = all_anch[fg_mask_inboxes]  # all_anch.shape: [13, 2]
         
-            this_target = this_target[matched_gt_inds]
+            this_target = this_target[matched_gt_inds]  # this_target.shape: [13, 6]
         
-            for i in range(nl):
+            for i in range(nl):  # nl: 4
                 layer_idx = from_which_layer == i
                 matching_bs[i].append(all_b[layer_idx])
                 matching_as[i].append(all_a[layer_idx])
@@ -1587,60 +1697,112 @@ class ComputeLossAuxOTA:
                 matching_gis[i] = torch.tensor([], device='cuda:0', dtype=torch.int64)
                 matching_targets[i] = torch.tensor([], device='cuda:0', dtype=torch.int64)
                 matching_anchs[i] = torch.tensor([], device='cuda:0', dtype=torch.int64)
-
+        # matching_bs: [[], [], [0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0]]
+        # matching_as: [[], [], [2, 2, 2, 2, 2, 2, 2], [0, 0, 0, 0, 0, 0]]
+        # matching_gjs: [[], [], [20, 20, 20, 19, 19, 21, 21], [10, 10, 10, 9, 10, 10]]
+        # matching_gis: [[], [], [21, 29, 20, 21, 29, 21, 29], [10, 14, 13, 14, 11, 15]]
+        # matching_targets: [[],
+        #                    [],
+        #                    [[          0,           0,     0.53174,     0.51709,     0.20032,     0.80908],
+        #                     [          0,           0,     0.73633,     0.51416,     0.21118,     0.80762],
+        #                     [          0,           0,     0.53174,     0.51709,     0.20032,     0.80908],
+        #                     [          0,           0,     0.53174,     0.51709,     0.20032,     0.80908],
+        #                     [          0,           0,     0.73633,     0.51416,     0.21118,     0.80762],
+        #                     [          0,           0,     0.53174,     0.51709,     0.20032,     0.80908],
+        #                     [          0,           0,     0.73633,     0.51416,     0.21118,     0.80762]],
+        #                    [[          0,           0,     0.53174,     0.51709,     0.20032,     0.80908],
+        #                     [          0,           0,     0.73633,     0.51416,     0.21118,     0.80762],
+        #                     [          0,           0,     0.73633,     0.51416,     0.21118,     0.80762],
+        #                     [          0,           0,     0.73633,     0.51416,     0.21118,     0.80762],
+        #                     [          0,           0,     0.53174,     0.51709,     0.20032,     0.80908],
+        #                     [          0,           0,     0.73633,     0.51416,     0.21118,     0.80762]]]
+        # matching_anchs: [[],
+        #                  [],
+        #                  [[7.4375, 16.938],
+        #                   [7.4375, 16.938],
+        #                  [7.4375, 16.938],
+        #                  [7.4375, 16.938],
+        #                  [7.4375, 16.938],
+        #                  [7.4375, 16.938],
+        #                  [7.4375, 16.938]],
+        #                  [[6.8125, 9.6094],
+        #                   [6.8125, 9.6094],
+        #                   [6.8125, 9.6094],
+        #                   [6.8125, 9.6094],
+        #                   [6.8125, 9.6094],
+        #                   [6.8125, 9.6094]]]
         return matching_bs, matching_as, matching_gjs, matching_gis, matching_targets, matching_anchs              
 
     def find_5_positive(self, p, targets):
+        # 输出结果：
+        # - indices: [(b,a,gj,gi) * 4]，yolov7-w6有4个head输出，所以indices里面有4个列表,
+        #             b里面对应的是哪个batch_size，a里面对应都是哪个head层的anchor，
+        #             gj对应的是匹配到的anchor的y坐标值(int)，gi对应的是匹配到的anchor的x坐标值(int)
+        # - anch：[(anchorwh) * 4]，yolov7-w6有4个head输出，所以anch里面有4个列表,
+        #           anchorhw对应的是匹配到的anchor[anchorh, anchow]
+
         # Build targets for compute_loss(), input targets(image,class,x,y,w,h)
-        na, nt = self.na, targets.shape[0]  # number of anchors, targets
+        na, nt = self.na, targets.shape[0]  # number of anchors, targets, na: 3, nt: 1
         indices, anch = [], []
-        gain = torch.ones(7, device=targets.device).long()  # normalized to gridspace gain
-        ai = torch.arange(na, device=targets.device).float().view(na, 1).repeat(1, nt)  # same as .repeat_interleave(nt)
-        targets = torch.cat((targets.repeat(na, 1, 1), ai[:, :, None]), 2)  # append anchor indices
+        gain = torch.ones(7, device=targets.device).long()  # normalized to gridspace gain, gain: [1, 1, 1, 1, 1, 1, 1]
+        ai = torch.arange(na, device=targets.device).float().view(na, 1).repeat(1, nt)  # same as .repeat_interleave(nt), ai: [[0.0], [1.0], [2.0]]
+        targets = torch.cat((targets.repeat(na, 1, 1), ai[:, :, None]), 2)  # append anchor indices, targets: [[[0.0, 0.0, 0.585, 0.2778, 0.5938, 0.3389, 0.0]], [[0.0, 0.0, 0.585, 0.2778, 0.5938, 0.3389, 1.0]], [[0.0, 0.0, 0.585, 0.2778, 0.5938, 0.3389, 2.0]]]
 
         g = 1.0  # bias
         off = torch.tensor([[0, 0],
                             [1, 0], [0, 1], [-1, 0], [0, -1],  # j,k,l,m
                             # [1, 1], [1, -1], [-1, 1], [-1, -1],  # jk,jm,lk,lm
-                            ], device=targets.device).float() * g  # offsets
+                            ], device=targets.device).float() * g  # offsets , 一个目标同时匹配5个正样本
 
-        for i in range(self.nl):
-            anchors = self.anchors[i]
-            gain[2:6] = torch.tensor(p[i].shape)[[3, 2, 3, 2]]  # xyxy gain
+        for i in range(self.nl): # self.anchors: [[[2.375, 3.375], [5.5, 5.0], [4.75, 11.75]], [[6.0, 4.25], [5.375, 9.5], [11.25, 8.5625]], [[4.375, 9.40625], [9.46875, 8.25], [7.4375, 16.9375]], [[6.8125, 9.609375], [11.546875, 5.9375], [14.453125, 12.375]]]
+            anchors = self.anchors[i]  # anchors: [[ 2.37500,  3.37500],[ 5.50000,  5.00000],[ 4.75000, 11.75000]]
+            gain[2:6] = torch.tensor(p[i].shape)[[3, 2, 3, 2]]  # xyxy gain, gain: [  1,   1, 160, 160, 160, 160,   1]
 
-            # Match targets to anchors
-            t = targets * gain
+            # Match targets to anchors, 还原当前feature_map下的真实坐标值
+            t = targets * gain # t:[[[0.0, 0.0, 93.61923, 44.445457, 94.98856, 54.234386, 0.0]], [[0.0, 0.0, 93.61923, 44.445457, 94.98856, 54.234386, 1.0]], [[0.0, 0.0, 93.61923, 44.445457, 94.98856, 54.234386, 2.0]]]
             if nt:
-                # Matches
+                # Matches，计算wh与anchors_wh的比值，如果都小于4，则判定当前anchor尺寸存在正样本
                 r = t[:, :, 4:6] / anchors[:, None]  # wh ratio
-                j = torch.max(r, 1. / r).max(2)[0] < self.hyp['anchor_t']  # compare
+                j = torch.max(r, 1. / r).max(2)[0] < self.hyp['anchor_t']  # compare, self.hyp['anchor_t']:4
                 # j = wh_iou(anchors, t[:, 4:6]) > model.hyp['iou_t']  # iou(3,n)=wh_iou(anchors(3,2), gwh(n,2))
                 t = t[j]  # filter
 
-                # Offsets
-                gxy = t[:, 2:4]  # grid xy
-                gxi = gain[[2, 3]] - gxy  # inverse
-                j, k = ((gxy % 1. < g) & (gxy > 1.)).T
-                l, m = ((gxi % 1. < g) & (gxi > 1.)).T
-                j = torch.stack((torch.ones_like(j), j, k, l, m))
+                # Offsets, g: 1.0
+                gxy = t[:, 2:4]  # grid xy， gxy: [[23.40481, 11.11136],[23.40481, 11.11136]]
+                gxi = gain[[2, 3]] - gxy  # inverse , gxi: [[16.59519, 28.88864],[16.59519, 28.88864]]
+                j, k = ((gxy % 1. < g) & (gxy > 1.)).T  # j, k: [True, True], [True, True]
+                l, m = ((gxi % 1. < g) & (gxi > 1.)).T  # l, m: [True, True], [True, True]
+                j = torch.stack((torch.ones_like(j), j, k, l, m))  # j: [[True, True],[True, True],[True, True],[True, True],[True, True]]
                 t = t.repeat((5, 1, 1))[j]
-                offsets = (torch.zeros_like(gxy)[None] + off[:, None])[j]
+                offsets = (torch.zeros_like(gxy)[None] + off[:, None])[j] # offsets: [[0.0, 0.0], [0.0, 0.0], [1.0, 0.0], [1.0, 0.0], [0.0, 1.0], [0.0, 1.0], [-1.0, 0.0], [-1.0, 0.0], [0.0, -1.0], [0.0, -1.0]]
             else:
                 t = targets[0]
                 offsets = 0
 
             # Define
-            b, c = t[:, :2].long().T  # image, class
-            gxy = t[:, 2:4]  # grid xy
-            gwh = t[:, 4:6]  # grid wh
-            gij = (gxy - offsets).long()
-            gi, gj = gij.T  # grid xy indices
+            b, c = t[:, :2].long().T  # image, class , b: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], c: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+            gxy = t[:, 2:4]  # grid xy , gxy: [[23.40481, 11.11136] x 10]
+            gwh = t[:, 4:6]  # grid wh, gwh: [[23.74714, 13.55860] x 10]
+            gij = (gxy - offsets).long() # gij: [[23, 11], [23, 11], [22, 11], [22, 11], [23, 10], [23, 10], [24, 11], [24, 11], [23, 12], [23, 12]]
+            gi, gj = gij.T  # grid xy indices, gi: [23, 23, 22, 22, 23, 23, 24, 24, 23, 23], gj: [11, 11, 11, 11, 10, 10, 11, 11, 12, 12]
 
             # Append
-            a = t[:, 6].long()  # anchor indices
-            indices.append((b, a, gj.clamp_(0, gain[3] - 1), gi.clamp_(0, gain[2] - 1)))  # image, anchor, grid indices
+            a = t[:, 6].long()  # anchor indices, a: [1, 2, 1, 2, 1, 2, 1, 2, 1, 2]
+            indices.append((b, a, gj.clamp_(0, gain[3] - 1), gi.clamp_(0, gain[2] - 1)))  # image, anchor, grid indices, # .clamp_(min,max)压缩到(min,max)区间
             anch.append(anchors[a])  # anchors
-
+        # indices: [ ( [], [], [], [] ),  # 一个列表四个值(b,a,gj,gi), list0.shape:[[0],[0],[0],[0]]
+        #          ( [], [], [], [] ),  # list1.shape:[[0],[0],[0],[0]]
+        #          ( [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [1, 2, 1, 2, 1, 2, 1, 2, 1, 2],
+        #          [11, 11, 11, 11, 10, 10, 11, 11, 12, 12], [23, 23, 22, 22, 23, 23, 24, 24, 23, 23] ),  # list2.shape:[[10],[10],[10],[10]]
+        #          ( [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2],
+        #          [5, 5, 5, 5, 5, 5, 4, 4, 4, 5, 5, 5, 6, 6, 6], [11, 11, 11, 10, 10, 10, 11, 11, 11, 12, 12, 12, 11, 11, 11] ) ]  # list3.shape:[[15],[15],[15],[15]]
+        # anch: [ ( [] ),
+        #       ( [] ),
+        #       ( [[ 9.46875,  8.25000],[ 7.43750, 16.93750],[ 9.46875,  8.25000],[ 7.43750, 16.93750],[ 9.46875,  8.25000],
+        #         [ 7.43750, 16.93750],[ 9.46875,  8.25000],[ 7.43750, 16.93750],[ 9.46875,  8.25000],[ 7.43750, 16.93750]] ),
+        #       ( [[ 6.81250,  9.60938],[11.54688,  5.93750],[14.45312, 12.37500],[ 6.81250,  9.60938],[11.54688,  5.93750],
+        #         [14.45312, 12.37500],[ 6.81250,  9.60938],[11.54688,  5.93750],[14.45312, 12.37500],[ 6.81250,  9.60938],
+        #         [11.54688,  5.93750],[14.45312, 12.37500],[ 6.81250,  9.60938],[11.54688,  5.93750],[14.45312, 12.37500]] ) ]
         return indices, anch                 
 
     def find_3_positive(self, p, targets):
@@ -1650,7 +1812,7 @@ class ComputeLossAuxOTA:
         gain = torch.ones(7, device=targets.device).long()  # normalized to gridspace gain
         ai = torch.arange(na, device=targets.device).float().view(na, 1).repeat(1, nt)  # same as .repeat_interleave(nt)
         targets = torch.cat((targets.repeat(na, 1, 1), ai[:, :, None]), 2)  # append anchor indices
-
+        # 与find_5_positive唯一的区别在于这个g，影响到下面的取值范围off
         g = 0.5  # bias
         off = torch.tensor([[0, 0],
                             [1, 0], [0, 1], [-1, 0], [0, -1],  # j,k,l,m
@@ -1693,5 +1855,34 @@ class ComputeLossAuxOTA:
             a = t[:, 6].long()  # anchor indices
             indices.append((b, a, gj.clamp_(0, gain[3] - 1), gi.clamp_(0, gain[2] - 1)))  # image, anchor, grid indices
             anch.append(anchors[a])  # anchors
-
+        # indices: [ (tensor([], device='cuda:0', dtype=torch.int64), tensor([], device='cuda:0', dtype=torch.int64),
+        #  tensor([], device='cuda:0', dtype=torch.int64), tensor([], device='cuda:0', dtype=torch.int64)
+        # ),
+        # (tensor([], device='cuda:0', dtype=torch.int64), tensor([], device='cuda:0', dtype=torch.int64),
+        #  tensor([], device='cuda:0', dtype=torch.int64), tensor([], device='cuda:0', dtype=torch.int64)
+        # ),
+        # (tensor([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], device='cuda:0'),
+        #  tensor([0, 0, 1, 1, 2, 2, 0, 0, 1, 1, 2, 2, 0, 0, 1, 1, 2, 2], device='cuda:0'),
+        #  tensor([20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 21, 21, 21, 21, 21, 21], device='cuda:0'),
+        #  tensor([21, 29, 21, 29, 21, 29, 20, 28, 20, 28, 20, 28, 21, 29, 21, 29, 21, 29], device='cuda:0')
+        # ),
+        # (tensor([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], device='cuda:0'),
+        #  tensor([0, 0, 1, 1, 2, 2, 0, 0, 1, 1, 2, 2, 0, 0, 1, 1, 2, 2], device='cuda:0'),
+        #  tensor([10, 10, 10, 10, 10, 10, 9, 9, 9, 9, 9, 9, 10, 10, 10, 10, 10, 10], device='cuda:0'),
+        #  tensor([10, 14, 10, 14, 10, 14, 10, 14, 10, 14, 10, 14, 11, 15, 11, 15, 11, 15], device='cuda:0')
+        # ) ]
+        # anch: [tensor([], device='cuda:0', size=(0, 2)),
+        #        tensor([], device='cuda:0', size=(0, 2)),
+        #        tensor([[ 4.37500,  9.40625],[ 4.37500,  9.40625],[ 9.46875,  8.25000],
+        #                [ 9.46875,  8.25000],[ 7.43750, 16.93750],[ 7.43750, 16.93750],
+        #                [ 4.37500,  9.40625],[ 4.37500,  9.40625],[ 9.46875,  8.25000],
+        #                [ 9.46875,  8.25000],[ 7.43750, 16.93750],[ 7.43750, 16.93750],
+        #                [ 4.37500,  9.40625],[ 4.37500,  9.40625],[ 9.46875,  8.25000],
+        #                [ 9.46875,  8.25000],[ 7.43750, 16.93750],[ 7.43750, 16.93750]], device='cuda:0'),
+        #        tensor([[ 6.81250,  9.60938],[ 6.81250,  9.60938],[11.54688,  5.93750],
+        #             [11.54688,  5.93750],[14.45312, 12.37500],[14.45312, 12.37500],
+        #             [ 6.81250,  9.60938],[ 6.81250,  9.60938],[11.54688,  5.93750],
+        #             [11.54688,  5.93750],[14.45312, 12.37500],[14.45312, 12.37500],
+        #             [ 6.81250,  9.60938],[ 6.81250,  9.60938],[11.54688,  5.93750],
+        #             [11.54688,  5.93750],[14.45312, 12.37500],[14.45312, 12.37500]], device='cuda:0')]
         return indices, anch

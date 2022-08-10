@@ -1,0 +1,32 @@
+# YOLOv5 🚀 by Ultralytics, GPL-3.0 license
+# COCO 2017 dataset http://cocodataset.org
+# Example usage: python train.py --data coco.yaml
+# parent
+# ├── yolov5
+# └── datasets
+#     └── coco  ← downloads here
+
+
+# Train/val/test sets as 1) dir: path/to/imgs, 2) file: path/to/imgs.txt, or 3) list: [path/to/imgs1, path/to/imgs2, ..]
+#train: /ai/223/person/huheng/code/detection/CenterNet-HarDNet/data/coco/yolo/yolo_train/train2017.txt  # 118k images
+#val: /ai/223/person/huheng/code/detection/CenterNet-HarDNet/data/coco/yolo/yolo_val/val2017.txt  # 5k images
+#test: /ai/223/person/huheng/code/detection/CenterNet-HarDNet/data/coco/yolo/yolo_val/val2017.txt  #
+
+# 09服务器
+train: /ai/223/person/huheng/huheng/dataset/NEWSHENYAN/imgxmljson220514/yolo/yolo_train/img_xml.txt  # 118k images
+val: /ai/223/person/huheng/huheng/dataset/NEWSHENYAN/imgxmljson220514/yolo/yolo_val/img_xml.txt  # 5k images
+test: /ai/223/person/huheng/huheng/dataset/NEWSHENYAN/imgxmljson220514/yolo/yolo_val/img_xml.txt  #
+
+# 77服务器
+#train: /root/hh_workspace/dataset/NEWSHENYAN/imgxmljson220514/yolo/yolo_train/img_xml.txt  # 118k images
+#val: /root/hh_workspace/dataset/NEWSHENYAN/imgxmljson220514/yolo/yolo_val/img_xml.txt  # 5k images
+#test: /root/hh_workspace/dataset/NEWSHENYAN/imgxmljson220514/yolo/yolo_val/img_xml.txt  #
+
+
+
+# Classes
+nc: 5  # number of classes
+names: ['wq', 'bk', 'smwj', 'bkqz', 'tb']  # class names
+
+
+

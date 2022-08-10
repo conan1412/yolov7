@@ -533,6 +533,8 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
 
     def __getitem__(self, index):
         index = self.indices[index]  # linear, shuffled, or image_weights
+        if index == 44:  # only for debug
+            print()
 
         hyp = self.hyp
         mosaic = self.mosaic and random.random() < hyp['mosaic']
@@ -556,16 +558,16 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
 
         else:
             # Load image
-            img, (h0, w0), (h, w) = load_image(self, index)
+            img, (h0, w0), (h, w) = load_image(self, index)  # img.shape: (960, 1280, 3), (h0, w0): (1200, 1600), (h, w): (960, 1280)
 
             # Letterbox
             shape = self.batch_shapes[self.batch[index]] if self.rect else self.img_size  # final letterboxed shape
-            img, ratio, pad = letterbox(img, shape, auto=False, scaleup=self.augment)
-            shapes = (h0, w0), ((h / h0, w / w0), pad)  # for COCO mAP rescaling
+            img, ratio, pad = letterbox(img, shape, auto=False, scaleup=self.augment)  # img.shape: (1280, 1280, 3), ratio: (1.0, 1.0),pad: (0.0, 160.0)
+            shapes = (h0, w0), ((h / h0, w / w0), pad)  # for COCO mAP rescaling  # shapes: ((1200, 1600), ((0.8, 0.8), (0.0, 160.0)))
 
-            labels = self.labels[index].copy()
+            labels = self.labels[index].copy()  # labels: [[0.0, 0.470938, 0.42375, 0.568125, 0.4325]]
             if labels.size:  # normalized xywh to pixel xyxy format
-                labels[:, 1:] = xywhn2xyxy(labels[:, 1:], ratio[0] * w, ratio[1] * h, padw=pad[0], padh=pad[1])
+                labels[:, 1:] = xywhn2xyxy(labels[:, 1:], ratio[0] * w, ratio[1] * h, padw=pad[0], padh=pad[1]) # labels: [[0.0, 239.20062, 359.2, 966.40063, 774.39996]]
 
         if self.augment:
             # Augment imagespace
